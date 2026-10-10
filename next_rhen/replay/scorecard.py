@@ -5,10 +5,12 @@ estimate realizable alpha, fill orders, promote strategies or contact brokers.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
 import math
+import re
 from typing import Any, Mapping
 
 from next_rhen.research.outcomes import SCHEMA as OUTCOMES_SCHEMA, WINDOWS
@@ -25,6 +27,7 @@ _STATUSES = frozenset({
     "OBSERVED_UNATTESTED", "NOT_YET_DUE", "MISSING_ANCHOR", "MISSING_HORIZON",
 })
 _DECISIONS = frozenset({"QUALIFIED", "REJECTED", "UNMEASURABLE"})
+_SOURCE_SHA = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ReplayContractError(ValueError):
@@ -34,6 +37,20 @@ class ReplayContractError(ValueError):
 def _digest(value: Mapping[str, Any]) -> str:
     return sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
                             allow_nan=False).encode("utf-8")).hexdigest()
+
+
+def _utc_stamp(value: Any, field: str) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ReplayContractError(f"{field} requires a canonical UTC timestamp")
+    try:
+        at = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ReplayContractError(f"{field} timestamp invalid") from exc
+    if at.tzinfo is None or at.utcoffset() != timedelta(0) or (
+        at.isoformat().replace("+00:00", "Z") != value
+    ):
+        raise ReplayContractError(f"{field} timestamp is not canonical UTC")
+    return at
 
 
 def _cost(value: Any, key: str) -> Decimal:
@@ -84,6 +101,10 @@ def score_paper_horizons(outcomes: Mapping[str, Any], *, cost_model: Mapping[str
             or len(records) != size * len(WINDOWS)):
         raise ReplayContractError("full candidate horizon grid is incomplete")
 
+    evaluated = _utc_stamp(outcomes.get("evaluated_at"), "evaluated_at")
+    decision_at: datetime | None = None
+    decisions_by_symbol: dict[str, str] = {}
+    anchors_by_symbol: dict[str, str | None] = {}
     seen: set[tuple[str, int]] = set()
     per_horizon: dict[int, dict] = {
         minutes: {"observed": 0, "missing": 0, "gross": Decimal(0),
@@ -104,6 +125,33 @@ def score_paper_horizons(outcomes: Mapping[str, Any], *, cost_model: Mapping[str
         status, decision = result["status"], result["recorded_decision"]
         if status not in _STATUSES or decision not in _DECISIONS:
             raise ReplayContractError("unknown observation or decision state")
+        due = _utc_stamp(result["due_at"], "due_at")
+        inferred_decision_at = due - timedelta(minutes=minutes)
+        if decision_at is None:
+            decision_at = inferred_decision_at
+        elif inferred_decision_at != decision_at:
+            raise ReplayContractError("due_at not aligned to the original decision cycle")
+        if (status == "NOT_YET_DUE") != (evaluated < due):
+            raise ReplayContractError("observation maturity disagrees with evaluated_at")
+        if symbol in decisions_by_symbol and decisions_by_symbol[symbol] != decision:
+            raise ReplayContractError("recorded decision changed across horizons")
+        decisions_by_symbol[symbol] = decision
+        anchor_ref, future_ref = result["anchor_sha256"], result["horizon_sha256"]
+        for source_name, source_ref in (("anchor", anchor_ref), ("horizon", future_ref)):
+            if source_ref is not None and (
+                not isinstance(source_ref, str) or
+                not _SOURCE_SHA.fullmatch(source_ref)
+            ):
+                raise ReplayContractError(f"{source_name} SHA256 reference invalid")
+        if symbol in anchors_by_symbol and anchors_by_symbol[symbol] != anchor_ref:
+            raise ReplayContractError("anchor source changed across horizons")
+        anchors_by_symbol[symbol] = anchor_ref
+        if status == "NOT_YET_DUE" and future_ref is not None:
+            raise ReplayContractError("future source cannot be observed before maturity")
+        if status == "MISSING_ANCHOR" and anchor_ref is not None:
+            raise ReplayContractError("missing anchor status has an anchor source")
+        if status == "MISSING_HORIZON" and (anchor_ref is None or future_ref is not None):
+            raise ReplayContractError("missing horizon status has inconsistent sources")
         statuses[status] += 1
         b = per_horizon[minutes]
         is_observed = status == "OBSERVED_UNATTESTED"
@@ -112,10 +160,7 @@ def score_paper_horizons(outcomes: Mapping[str, Any], *, cost_model: Mapping[str
             if (not isinstance(gross, (int, float)) or isinstance(gross, bool) or
                     not math.isfinite(gross) or gross < -10000):
                 raise ReplayContractError("invalid observed hypothetical gross mark")
-            if not (isinstance(result["anchor_sha256"], str) and
-                    isinstance(result["horizon_sha256"], str) and
-                    len(result["anchor_sha256"]) == 64 and
-                    len(result["horizon_sha256"]) == 64):
+            if anchor_ref is None or future_ref is None:
                 raise ReplayContractError("observed mark missing referenced source")
             net = Decimal(str(gross)) - roundtrip
             b["observed"] += 1

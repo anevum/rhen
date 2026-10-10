@@ -159,6 +159,60 @@ def test_horizon_specific_survivor_drop_and_duplicates_are_blocked():
         score_paper_horizons(tampered,cost_model=COSTS)
 
 
+
+@pytest.mark.parametrize("case,reason", [
+    ("shift_due", "due_at"),
+    ("decision_switch", "recorded decision"),
+    ("anchor_switch", "anchor source"),
+    ("bogus_source_sha", "SHA256 reference"),
+    ("undue_future_mark", "maturity"),
+    ("missing_horizon_with_source", "missing horizon"),
+    ("pretend_not_due", "maturity"),
+])
+def test_replay_rejects_cross_horizon_and_maturity_forgery_with_new_digest(case, reason):
+    forged = observations()
+    first = next(row for row in forged["results"]
+                 if row["symbol"] == "AAPL" and row["horizon_minutes"] == 5)
+    fifteen = next(row for row in forged["results"]
+                    if row["symbol"] == "AAPL" and row["horizon_minutes"] == 15)
+    missing = next(row for row in forged["results"]
+                   if row["symbol"] == "MSFT" and row["horizon_minutes"] == 60)
+    if case == "shift_due":
+        first["due_at"] = ts(6)
+    elif case == "decision_switch":
+        first["recorded_decision"] = "REJECTED"
+    elif case == "anchor_switch":
+        fifteen["anchor_sha256"] = "b" * 64
+    elif case == "bogus_source_sha":
+        first["horizon_sha256"] = "g" * 64
+    elif case == "undue_future_mark":
+        forged["evaluated_at"] = ts(2)
+    elif case == "missing_horizon_with_source":
+        missing["horizon_sha256"] = SHA
+    elif case == "pretend_not_due":
+        missing["status"] = "NOT_YET_DUE"
+        forged["status_counts"]["MISSING_HORIZON"] -= 1
+        forged["status_counts"]["NOT_YET_DUE"] += 1
+    forged["content_sha256"] = fingerprint(forged)
+    with pytest.raises(ReplayContractError, match=reason):
+        score_paper_horizons(forged, cost_model=COSTS)
+
+
+def test_truly_not_yet_due_marks_are_null_and_never_counted_as_observed():
+    early = mature_cycle(source(),
+        anchor_prices={"AAPL": point(-1, 100), "MSFT": point(-1, 200)},
+        horizon_prices={},
+        evaluated_at=ts(2))
+    card = score_paper_horizons(early, cost_model=COSTS)
+    assert len(card["hypothetical_marks"]) == 6
+    assert all(row["source_status"] == "NOT_YET_DUE" and
+               row["hypothetical_net_after_assumed_cost_bps"] is None
+               for row in card["hypothetical_marks"])
+    assert all(summary["observed_candidates"] == 0
+               and summary["mean_net_assumption_bps"] is None
+               for summary in card["horizon_summary"].values())
+
+
 def test_unverified_price_sources_cannot_claim_broker_equity_curve():
     card=score_paper_horizons(observations(),cost_model=COSTS)
     text=json.dumps(card)

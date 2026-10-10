@@ -16,6 +16,8 @@ A declared static research cost model requires four bounded numeric nonnegative 
 
 The returned scorecard preserves `net_execution_pnl: null`, `broker_order_authority: false`, `validated_alpha: false`, `promotion_allowed: false`, and `source_quality: AWAITING_INDEPENDENT_ATTESTATION`. Live or promoted source records, tampered SHA, missing modeled costs, duplicate/scoped-out symbols, horizon-specific survivor filtering, negative/unbounded costs and fabricated zero gross returns are rejected.
 
+Replay now also independently checks canonical UTC due/evaluation timestamps, consistent original decision time and recorded decision across every symbol's horizons, unchanged anchor provenance, valid lowercase source SHA256 references and missing-versus-observed maturity status. Those invariants reject source documents with internally forged row semantics even if a new digest has been computed; they do not attest the source or establish genuine alpha. Tests exercise all these denial cases and correctly immature null-valued outcomes.
+
 ## Next acceptance
 
 Connect these pure functions to independently attested, timestamped full-population raw evidence after real paper read-only source validation. Then complete deterministic executable replay, spread/slippage calibration, out-of-sample testing, and evidence archive restore. Trading stays off until separately authorized.
