@@ -20,6 +20,7 @@ WINDOWS = (5, 15, 60)
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 OBS_KEYS = frozenset({"observed_at", "close", "source_sha256"})
 MAX_PRICE = Decimal("1000000000000")
+MAX_GROSS_BPS = Decimal("1000000")
 
 
 class OutcomeContractError(ValueError):
@@ -142,6 +143,8 @@ def mature_cycle(
             }
             if status == "OBSERVED_UNATTESTED":
                 value = (forward[1] / entry[1] - Decimal(1)) * Decimal(10000)
+                if not value.is_finite() or not -Decimal(10000) <= value <= MAX_GROSS_BPS:
+                    raise OutcomeContractError("hypothetical gross return exceeds bounded paper range")
                 result["gross_long_reference_bps"] = float(round(value, 6))
             results.append(result)
             counts[status] += 1

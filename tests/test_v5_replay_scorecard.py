@@ -219,3 +219,34 @@ def test_unverified_price_sources_cannot_claim_broker_equity_curve():
     for field in ['"orders"', '"positions"', '"equity_curve"', '"realized_profit"']:
         assert field not in text
     assert card["source_outcome_sha256"]==observations()["content_sha256"]
+
+
+@pytest.mark.parametrize("corruption,reason", [
+    (lambda d: d.update({"workspace_id": "wrk_invalid!"}), "identity"),
+    (lambda d: d.update({"run_id": "unsafe run"}), "identity"),
+    (lambda d: d.update({"cycle_id": ""}), "identity"),
+    (lambda d: d.update({"sequence_no": True}), "identity"),
+    (lambda d: d.update({"decision_cycle_sha256": "Z" * 64}), "identity"),
+    (lambda d: d.update({"broker_token": "DO-NOT-ACCEPT"}), "exact paper"),
+    (lambda d: d["status_counts"].update({"MISSING_HORIZON": True}), "status counts"),
+    (lambda d: [row.update({"symbol": "AAPL;SECRET"}) for row in d["results"]
+                if row["symbol"] == "AAPL"], "symbol/horizon"),
+    (lambda d: d["results"][0].update({"horizon_minutes": True}), "symbol/horizon"),
+    (lambda d: d["results"][0].update({"gross_long_reference_bps": 1e300}), "gross mark"),
+])
+def test_rehashed_outcomes_cannot_forge_identity_counts_or_unbounded_pricing(corruption,reason):
+    forged=observations()
+    corruption(forged)
+    forged["content_sha256"]=fingerprint(forged)
+    with pytest.raises(ReplayContractError, match=reason):
+        score_paper_horizons(forged,cost_model=COSTS)
+
+
+def test_forged_evaluation_before_decision_is_rejected_even_when_all_marks_not_due():
+    original=mature_cycle(source(),anchor_prices={},horizon_prices={},evaluated_at=ts(0))
+    # All 5/15/60 marks are NOT_YET_DUE. Rehashing an earlier evaluation
+    # preserves status/due consistency but cannot precede the decision cycle.
+    original["evaluated_at"]=ts(-1)
+    original["content_sha256"]=fingerprint(original)
+    with pytest.raises(ReplayContractError,match="precedes original decision"):
+        score_paper_horizons(original,cost_model=COSTS)

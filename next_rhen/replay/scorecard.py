@@ -28,6 +28,20 @@ _STATUSES = frozenset({
 })
 _DECISIONS = frozenset({"QUALIFIED", "REJECTED", "UNMEASURABLE"})
 _SOURCE_SHA = re.compile(r"^[0-9a-f]{64}$")
+_WORKSPACE = re.compile(r"^wrk_[A-Za-z0-9_-]{8,64}$")
+_STABLE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_SYMBOL = re.compile(r"^[A-Z][A-Z0-9.]{0,14}$")
+_OUTCOME_KEYS = frozenset({
+    "schema_version", "workspace_id", "run_id", "cycle_id", "sequence_no",
+    "decision_cycle_sha256", "execution_mode", "evaluated_at",
+    "source_quality", "execution_costs_included", "orders_or_positions",
+    "alpha_validated", "strategy_promotion_allowed", "horizons",
+    "candidate_count", "status_counts", "results", "content_sha256",
+})
+# 100x hypothetical one-hour appreciation is already exceptionally large.
+# Reject larger unverified price ratios rather than emit invalid/overflowed
+# scorecards or mistake a bad quote for extraordinary alpha.
+_MAX_GROSS_BPS = 1_000_000
 
 
 class ReplayContractError(ValueError):
@@ -71,8 +85,18 @@ def score_paper_horizons(outcomes: Mapping[str, Any], *, cost_model: Mapping[str
     Returns no strategy PASS, no equity curve, no trade P&L and no order
     authority. Missing outcome rows never become zero-P&L observations.
     """
-    if not isinstance(outcomes, dict):
-        raise ReplayContractError("outcomes must be an immutable replay document")
+    if not isinstance(outcomes, dict) or set(outcomes) != _OUTCOME_KEYS:
+        raise ReplayContractError("outcomes require exact paper research envelope fields")
+    if (not isinstance(outcomes["workspace_id"], str) or
+            not _WORKSPACE.fullmatch(outcomes["workspace_id"]) or
+            any(not isinstance(outcomes[key], str) or
+                    not _STABLE_ID.fullmatch(outcomes[key])
+                    for key in ("run_id", "cycle_id")) or
+            type(outcomes["sequence_no"]) is not int or
+            outcomes["sequence_no"] < 1 or
+            not isinstance(outcomes["decision_cycle_sha256"], str) or
+            not _SOURCE_SHA.fullmatch(outcomes["decision_cycle_sha256"])):
+        raise ReplayContractError("paper research source identity is malformed")
     if (outcomes.get("schema_version") != OUTCOMES_SCHEMA or
             outcomes.get("execution_mode") != "PAPER_RESEARCH_ONLY" or
             outcomes.get("source_quality") != "AWAITING_INDEPENDENT_ATTESTATION" or
@@ -101,6 +125,13 @@ def score_paper_horizons(outcomes: Mapping[str, Any], *, cost_model: Mapping[str
             or len(records) != size * len(WINDOWS)):
         raise ReplayContractError("full candidate horizon grid is incomplete")
 
+    recorded_statuses = outcomes.get("status_counts")
+    if (not isinstance(recorded_statuses, dict) or
+            set(recorded_statuses) != _STATUSES or
+            any(type(count) is not int or count < 0
+                for count in recorded_statuses.values()) or
+            sum(recorded_statuses.values()) != len(records)):
+        raise ReplayContractError("status counts require exact nonnegative integer values")
     evaluated = _utc_stamp(outcomes.get("evaluated_at"), "evaluated_at")
     decision_at: datetime | None = None
     decisions_by_symbol: dict[str, str] = {}
@@ -117,8 +148,9 @@ def score_paper_horizons(outcomes: Mapping[str, Any], *, cost_model: Mapping[str
         if not isinstance(result, dict) or set(result) != _RESULT_KEYS:
             raise ReplayContractError("horizon record has unexpected or missing fields")
         symbol, minutes = result["symbol"], result["horizon_minutes"]
-        if (not isinstance(symbol, str) or not symbol or
-                isinstance(minutes, bool) or minutes not in WINDOWS or
+        if (not isinstance(symbol, str) or
+                not _SYMBOL.fullmatch(symbol) or
+                type(minutes) is not int or minutes not in WINDOWS or
                 (symbol, minutes) in seen):
             raise ReplayContractError("duplicate or malformed symbol/horizon")
         seen.add((symbol, minutes))
@@ -158,7 +190,8 @@ def score_paper_horizons(outcomes: Mapping[str, Any], *, cost_model: Mapping[str
         gross = result["gross_long_reference_bps"]
         if is_observed:
             if (not isinstance(gross, (int, float)) or isinstance(gross, bool) or
-                    not math.isfinite(gross) or gross < -10000):
+                    not math.isfinite(gross) or
+                    not -10000 <= gross <= _MAX_GROSS_BPS):
                 raise ReplayContractError("invalid observed hypothetical gross mark")
             if anchor_ref is None or future_ref is None:
                 raise ReplayContractError("observed mark missing referenced source")
@@ -179,7 +212,9 @@ def score_paper_horizons(outcomes: Mapping[str, Any], *, cost_model: Mapping[str
             "hypothetical_gross_bps": gross if is_observed else None,
             "hypothetical_net_after_assumed_cost_bps": modeled,
         })
-    if statuses != outcomes.get("status_counts") or len(seen) != len(records):
+    if decision_at is not None and evaluated < decision_at:
+        raise ReplayContractError("evaluation timestamp precedes original decision")
+    if statuses != recorded_statuses or len(seen) != len(records):
         raise ReplayContractError("count or uniqueness integrity mismatch")
     # Require the same full candidate population at every horizon.
     groups = [{symbol for (symbol, h) in seen if h == minutes} for minutes in WINDOWS]

@@ -21,3 +21,10 @@ Replay now also independently checks canonical UTC due/evaluation timestamps, co
 ## Next acceptance
 
 Connect these pure functions to independently attested, timestamped full-population raw evidence after real paper read-only source validation. Then complete deterministic executable replay, spread/slippage calibration, out-of-sample testing, and evidence archive restore. Trading stays off until separately authorized.
+
+
+## Strict input envelope and bounded hypothetical marks — October 10 follow-up
+
+The offline Replay entry point now enforces **exact v1 envelope fields**, stable workspace/run/cycle identifiers, a positive integer sequence and a lowercase decision-cycle SHA256 reference. The horizon grid must use actual canonical U.S. equity symbol identifiers and exact integer horizon keys; recomputed digests do not bypass type checks. Recorded status counters must be nonnegative real integers (never Python booleans), the evaluated timestamp cannot precede the original decision even when every horizon is not yet due, and gross hypothetical reference returns must be finite within -10,000 to +1,000,000 bps. The sibling Research producer rejects more extreme price ratios before serialization or float overflow.
+
+These are bounds on **unverified research input integrity**, not an economic validation of results. No upstream market-source attestation, executable fill parity, risk authorization, real-money P&L or automated promotion is introduced. Existing PAPER_RESEARCH_ONLY safety flags and all untouched-live-trading requirements remain in force.

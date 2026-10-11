@@ -200,3 +200,11 @@ def test_unmeasurable_candidate_can_have_reference_return_without_trade():
     assert tsla[0]["recorded_decision"] == "UNMEASURABLE"
     assert tsla[0]["gross_long_reference_bps"] == 0
     assert tsla[1]["status"] == "MISSING_HORIZON"
+
+
+def test_extreme_price_ratios_fail_closed_before_nan_or_infinite_scorecards():
+    anchors,futures=input_prices()
+    anchors["AAPL"]["close"]=1e-9
+    futures["AAPL"]["5"]["close"]=100_000.0
+    with pytest.raises(OutcomeContractError,match="hypothetical gross return"):
+        run(anchors=anchors,futures=futures)
