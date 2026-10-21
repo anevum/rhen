@@ -23,8 +23,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install deterministic test dependencies
-        run: python -m pip install pytest==8.3.5
+        run: python -m pip install pytest==8.3.5 httpx==0.28.1
       - name: Compile research-only modules
-        run: python -m py_compile next_rhen/research/strategic_atlas.py next_rhen/research/outcomes.py next_rhen/replay/scorecard.py
+        run: python -m py_compile next_rhen/research/strategic_atlas.py next_rhen/research/outcomes.py next_rhen/replay/scorecard.py next_rhen/portfolio/alpaca_snapshot.py next_rhen/portfolio/alpaca_oauth_read_port.py next_rhen/portfolio/theme_projection.py next_rhen/finance/capital_readiness.py
       - name: Verify complete strategic and neighboring paper research contracts
-        run: python -m pytest -q tests/test_v5_strategic_atlas.py tests/test_v5_research_outcomes.py tests/test_v5_replay_scorecard.py
+        run: python -m pytest -q tests/test_v5_strategic_atlas.py tests/test_v5_research_outcomes.py tests/test_v5_replay_scorecard.py tests/test_v5_alpaca_snapshot.py tests/test_v5_alpaca_oauth_read_port.py tests/test_v5_capital_readiness.py tests/test_v5_theme_projection.py
