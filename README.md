@@ -225,3 +225,7 @@ Safety behavior:
 - Ledger reconciliation does not modify strategy signals, sizing, or risk rules.
 
 Required persistence variables are documented in `.env.example`.
+
+## Open-source license
+
+RHEN source is available under the [Apache License 2.0](LICENSE). Third-party dependencies are distributed under their own licenses; the RHEN license does not grant rights to their code or to project names and branding. Credentials, live account data, and private deployment configuration must remain outside the repository.
